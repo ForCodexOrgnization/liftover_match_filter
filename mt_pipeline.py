@@ -1717,6 +1717,7 @@ TRNA_INFO_LINES = [
     '##INFO=<ID=MTTRNA_H_PAIR_POS,Number=1,Type=String,Description="Human expected paired genomic position">',
     '##INFO=<ID=MTTRNA_S_PAIR_LIFTED_HPOS,Number=1,Type=String,Description="Species/source paired genomic position lifted to human genomic position through alignment posmap">',
     '##INFO=<ID=MTTRNA_PAIR_POS_MATCH,Number=1,Type=String,Description="yes/no/NA, whether lifted source paired position equals human expected paired position">',
+    '##INFO=<ID=MTTRNA_STRICT_MATCH,Number=1,Type=String,Description="yes/no, strict tRNA match: loop requires region+element match; stem requires region+element+pair_state+pair_pos match">',
 ]
 
 
@@ -1728,6 +1729,20 @@ def compare_values(a: str, b: str) -> str:
 
 def first_row(rows: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
     return rows[0] if rows else None
+
+
+def trna_strict_match(info: Dict[str, object]) -> str:
+    s_class = str(info.get("MTTRNA_S_CLASS", NA))
+    h_class = str(info.get("MTTRNA_H_CLASS", NA))
+    region_match = str(info.get("MTTRNA_REGION_MATCH", NA))
+    element_match = str(info.get("MTTRNA_ELEMENT_MATCH", NA))
+    pair_state_match = str(info.get("MTTRNA_PAIR_STATE_MATCH", NA))
+    pair_pos_match = str(info.get("MTTRNA_PAIR_POS_MATCH", NA))
+    if s_class == "loop" and h_class == "loop":
+        return "yes" if region_match == "yes" and element_match == "yes" else "no"
+    if s_class == "stem" and h_class == "stem":
+        return "yes" if (region_match == "yes" and element_match == "yes" and pair_state_match == "yes" and pair_pos_match == "yes") else "no"
+    return "no"
 
 
 def annotate_trna_record(
@@ -1801,6 +1816,7 @@ def annotate_trna_record(
             ann["MTTRNA_S_PAIR_LIFTED_HPOS"] = h_pair_final
             if hu_pair_pos is not None:
                 ann["MTTRNA_PAIR_POS_MATCH"] = "yes" if h_pair_final == hu_pair_pos else "no"
+    ann["MTTRNA_STRICT_MATCH"] = trna_strict_match(ann)
     return ann
 
 
@@ -1980,8 +1996,32 @@ def trna_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], posmap_path:
 # -----------------------------------------------------------------------------
 
 def record_passes_filter(info: Dict[str, str], mode: str) -> bool:
+    mode = mode.strip().lower()
     if mode in {"none", "", "off"}:
         return True
+    if mode == "region_policy":
+        # 1) coding: require strict codon PASS
+        # 2) tRNA: require region/pair-state/pair-position match
+        # 3) other noncoding: keep by default
+        codon_status = str(info.get("MTCODON_STATUS", NA))
+        if codon_status == "PASS":
+            return True
+        if codon_status not in {NA, "SKIPPED_NONCODING", "MISSING_COORD"}:
+            return False
+
+        trna_status = str(info.get("MTTRNA_STATUS", NA))
+        is_trna_variant = trna_status in {"OK", "NO_SPECIES_TRNA", "NO_HUMAN_TRNA"}
+        if is_trna_variant:
+            return info.get("MTTRNA_STRICT_MATCH") == "yes"
+        return True
+    if mode == "trna_loose_match":
+        return (
+            info.get("MTTRNA_REGION_MATCH") == "yes" or
+            info.get("MTTRNA_PAIR_STATE_MATCH") == "yes" or
+            info.get("MTTRNA_PAIR_POS_MATCH") == "yes"
+        )
+    if mode == "trna_strict_match":
+        return info.get("MTTRNA_STRICT_MATCH") == "yes"
     if mode == "codon_pass":
         return info.get("MTCODON_STATUS") == "PASS"
     if mode == "trna_region_match":

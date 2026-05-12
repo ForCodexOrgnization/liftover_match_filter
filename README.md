@@ -178,7 +178,20 @@ trna_region_match
 trna_pair_state_match
 trna_pair_pos_match
 codon_or_trna
+trna_loose_match
+trna_strict_match
+region_policy
 ```
+
+`region_policy` applies region-aware final filtering:
+1) coding variants require `MTCODON_STATUS=PASS`;
+2) tRNA variants require `MTTRNA_STRICT_MATCH=yes`;
+3) other noncoding variants (including control region) are kept.
+
+`MTTRNA_STRICT_MATCH` logic:
+- loop-loop: `MTTRNA_REGION_MATCH=yes` AND `MTTRNA_ELEMENT_MATCH=yes`
+- stem-stem: `MTTRNA_REGION_MATCH=yes` AND `MTTRNA_ELEMENT_MATCH=yes` AND `MTTRNA_PAIR_STATE_MATCH=yes` AND `MTTRNA_PAIR_POS_MATCH=yes`
+- mixed/other cases: `no`
 
 ## Notes
 
