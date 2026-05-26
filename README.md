@@ -169,6 +169,24 @@ python3 mt_pipeline.py filter-vcf \
   --output sample.final.vcf
 ```
 
+Export a manual-check audit table from annotated/final VCF:
+
+```bash
+python3 mt_pipeline.py export-audit-table \
+  --config config.example.ini \
+  --sample panTro6 \
+  --input sample.final.vcf \
+  --output sample.final.audit_table.tsv
+```
+
+Merge all sample audit TSVs into one file:
+
+```bash
+python3 mt_pipeline.py merge-audit-tables \
+  --config config.example.ini \
+  --output /path/to/all_samples.audit_table.tsv
+```
+
 Supported filter modes:
 
 ```text
@@ -209,3 +227,10 @@ human_trna_lookup_ignore_chrom = 0
 ```
 
 `species_trna_lookup_ignore_chrom=1` makes species tRNA lookup key on position only, and `species_trna_coord_space=rotated` switches species lookup to `INFO/MTLIFT_ORIG_ROT_POS`.
+
+
+Audit table columns include: species, sample (defaults to input VCF stem unless INFO/MTLIFT_SAMPLE exists), chrom, pos, ref, alt, lifted_pos, trna_status, trna_region_match, trna_species_id, trna_human_id, species tRNA pair type/pos, human tRNA pair type/pos, filter label, and whether it passes the configured final filter mode. If all tRNA columns are NA, the input VCF likely was not passed through the tRNA annotation stage.
+
+Set `[settings] export_variant_audit_table = 1` in `config.ini` if you want `run-sample` to auto-export audit tables.
+When `[settings] merge_audit_tables = 1` (default), each run also refreshes one merged file for all samples at `[paths] merged_audit_table`.
+By default (`audit_from_final_vcf = 0`), audit export uses pre-final-filter VCFs so the table includes **all variants** (including records that would fail final filtering).
