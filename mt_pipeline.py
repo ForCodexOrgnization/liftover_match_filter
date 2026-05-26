@@ -2273,7 +2273,7 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
     inferred_sample = strip_vcf_suffix(vcf_path)
     fields = [
         "species", "sample", "chrom", "pos", "ref", "alt", "lifted_pos",
-        "trna_status", "trna_pairing_type", "pair_pos", "human_pairing_type", "human_pair_pos",
+        "trna_status", "trna_region_match", "trna_species_id", "trna_human_id", "trna_pairing_type", "pair_pos", "human_pairing_type", "human_pair_pos",
         "filter_label", "passes_final_filter",
     ]
     rows = []
@@ -2297,6 +2297,9 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
                 "alt": parts[4],
                 "lifted_pos": info.get("MTLIFT_HUMAN_POS", parts[1]),
                 "trna_status": info.get("MTTRNA_STATUS", NA),
+                "trna_region_match": info.get("MTTRNA_REGION_MATCH", NA),
+                "trna_species_id": info.get("MTTRNA_S_ID", NA),
+                "trna_human_id": info.get("MTTRNA_H_ID", NA),
                 "trna_pairing_type": info.get("MTTRNA_S_PAIR_TYPE", NA),
                 "pair_pos": info.get("MTTRNA_S_PAIR_POS", NA),
                 "human_pairing_type": info.get("MTTRNA_H_PAIR_TYPE", NA),
@@ -2347,7 +2350,7 @@ def export_audit_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], summ
         log(f"Audit table: {in_vcf} -> {out_tsv}")
         stats = build_variant_audit_table(in_vcf, out_tsv, sample, mode)
         if stats.get("trna_annotated_rows", 0) == 0:
-            warn(f"Audit table has no MTTRNA_* annotations: {in_vcf}. Check run_trna_annotate and input VCF stage.")
+            warn(f"Audit table has no MTTRNA_* annotations: {in_vcf}. Check run_trna_annotate and whether you exported from pre-trna stage.")
         append_summary(summary_path, stats, "audit")
         outputs.append(out_tsv)
 
@@ -2427,10 +2430,13 @@ def run_sample(cfg: PipeConfig, sample: str) -> None:
                 qc_path,
             )
             append_summary(summary_path, qc_stats, "trna_gene_qc")
+    audit_input_vcfs = list(current_vcfs)
     if cfg.setting_bool("run_final_filter", False):
         current_vcfs = final_filter_stage(cfg, sample, current_vcfs, summary_path, dirs)
-    if cfg.setting_bool("export_variant_audit_table", False) and current_vcfs:
-        export_audit_stage(cfg, sample, current_vcfs, summary_path, dirs)
+        if cfg.setting_bool("audit_from_final_vcf", False):
+            audit_input_vcfs = list(current_vcfs)
+    if cfg.setting_bool("export_variant_audit_table", False) and audit_input_vcfs:
+        export_audit_stage(cfg, sample, audit_input_vcfs, summary_path, dirs)
     if cfg.setting_bool("keep_tmp", True) is False:
         shutil.rmtree(work_dir, ignore_errors=True)
     log(f"Done sample={sample}")
