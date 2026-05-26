@@ -2234,10 +2234,14 @@ def record_passes_filter(info: Dict[str, str], mode: str) -> bool:
         codon_status = str(info.get("MTCODON_STATUS", NA))
         if codon_status == "PASS":
             return True
-        if codon_status not in {NA, "SKIPPED_NONCODING", "MISSING_COORD"}:
+        if codon_status == "SKIPPED_NONCODING":
+            passed, _reason = evaluate_trna_region_policy(info)
+            return passed
+        # Be conservative for codon-unresolvable records in region_policy.
+        # NA usually means codon annotation missing; MISSING_COORD means coding state is unresolved.
+        if codon_status in {NA, "MISSING_COORD"}:
             return False
-        passed, _reason = evaluate_trna_region_policy(info)
-        return passed
+        return False
     if mode == "trna_loose_match":
         return (
             info.get("MTTRNA_REGION_MATCH") == "yes" or
@@ -2304,11 +2308,13 @@ def audit_final_filter_reason(info: Dict[str, str], mode: str) -> str:
         codon_status = str(info.get("MTCODON_STATUS", NA))
         if codon_status == "PASS":
             return "PASS_CODING_CODON"
-        if codon_status in {NA, "SKIPPED_NONCODING", "MISSING_COORD"}:
-            passed, reason = evaluate_trna_region_policy(info)
-            if passed:
-                return reason
+        if codon_status == "SKIPPED_NONCODING":
+            _passed, reason = evaluate_trna_region_policy(info)
             return reason
+        if codon_status == "MISSING_COORD":
+            return "coding_codon_unresolved:MISSING_COORD"
+        if codon_status == NA:
+            return "coding_codon_unresolved:NA"
         return f"coding_codon_fail:{codon_status}"
 
     if record_passes_filter(info, mode):

@@ -211,6 +211,7 @@ region_policy
 - loop-loop: requires element match + same local position (`MTTRNA_S_LOCAL == MTTRNA_H_LOCAL`)
 - non-comparable tRNA statuses (`NO_SPECIES_TRNA`, `NO_HUMAN_TRNA`, `NO_SPECIES_OR_HUMAN_TRNA`) are kept by default as `PASS_NONCOMPARABLE_TRNA:*`
 - class mismatch (stem vs loop) is dropped (`DROP_TRNA_REGION_MISMATCH:*`)
+- codon-unresolved records (`MTCODON_STATUS=NA` or `MISSING_COORD`) are dropped conservatively in `region_policy`
 
 `MTTRNA_STRICT_MATCH` logic:
 - loop-loop: `MTTRNA_REGION_MATCH=yes` AND `MTTRNA_ELEMENT_MATCH=yes`
