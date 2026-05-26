@@ -2188,29 +2188,54 @@ def trna_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], posmap_path:
 # Optional final filter
 # -----------------------------------------------------------------------------
 
+
+def evaluate_trna_region_policy(info: Dict[str, str]) -> Tuple[bool, str]:
+    trna_status = str(info.get("MTTRNA_STATUS", NA))
+    if trna_status in {"NO_SPECIES_TRNA", "NO_HUMAN_TRNA", "NO_SPECIES_OR_HUMAN_TRNA"}:
+        return False, f"DROP_ONE_SIDED_TRNA:{trna_status}"
+    if trna_status != "OK":
+        return True, "PASS_NON_TRNA_OR_MISSING"
+
+    s_class = str(info.get("MTTRNA_S_CLASS", NA)).lower()
+    h_class = str(info.get("MTTRNA_H_CLASS", NA)).lower()
+    if s_class != h_class:
+        return False, f"DROP_TRNA_REGION_MISMATCH:{s_class}_vs_{h_class}"
+
+    if info.get("MTTRNA_ELEMENT_MATCH") != "yes":
+        return False, f"DROP_TRNA_ELEMENT_MISMATCH:{info.get('MTTRNA_ELEMENT_MATCH', NA)}"
+
+    if s_class == "loop":
+        if info.get("MTTRNA_S_LOCAL") != info.get("MTTRNA_H_LOCAL"):
+            return False, f"DROP_LOOP_LOCAL_POS_MISMATCH:{info.get('MTTRNA_S_LOCAL', NA)}_vs_{info.get('MTTRNA_H_LOCAL', NA)}"
+        return True, "PASS_LOOP_RULE"
+
+    if s_class == "stem":
+        if info.get("MTTRNA_PAIR_POS_MATCH") != "yes":
+            return False, f"DROP_STEM_PAIR_POS_MISMATCH:{info.get('MTTRNA_PAIR_POS_MATCH', NA)}"
+        if info.get("MTTRNA_PAIR_STATE_MATCH") != "yes":
+            return False, f"DROP_STEM_PAIR_STATE_MISMATCH:{info.get('MTTRNA_PAIR_STATE_MATCH', NA)}"
+        if info.get("MTTRNA_ALLELE_EFFECT_MATCH") != "yes":
+            return False, f"DROP_STEM_ALLELE_EFFECT_MISMATCH:{info.get('MTTRNA_ALLELE_EFFECT_MATCH', NA)}"
+        if info.get("MTTRNA_COMPENSATED") != "yes":
+            return False, f"DROP_STEM_NOT_COMPENSATED:{info.get('MTTRNA_COMPENSATED', NA)}"
+        return True, "PASS_STEM_RULE"
+
+    if info.get("MTTRNA_REGION_MATCH") != "yes":
+        return False, f"DROP_TRNA_REGION_MISMATCH:{info.get('MTTRNA_REGION_MATCH', NA)}"
+    return True, "PASS_TRNA_OTHER_CLASS"
+
 def record_passes_filter(info: Dict[str, str], mode: str) -> bool:
     mode = mode.strip().lower()
     if mode in {"none", "", "off"}:
         return True
     if mode == "region_policy":
-        # 1) coding: require strict codon PASS
-        # 2) tRNA: require region/pair-state/pair-position match
-        # 3) other noncoding: keep by default
         codon_status = str(info.get("MTCODON_STATUS", NA))
         if codon_status == "PASS":
             return True
         if codon_status not in {NA, "SKIPPED_NONCODING", "MISSING_COORD"}:
             return False
-
-        trna_status = str(info.get("MTTRNA_STATUS", NA))
-        is_trna_variant = trna_status in {"OK", "NO_SPECIES_TRNA", "NO_HUMAN_TRNA"}
-        if is_trna_variant:
-            return (
-                info.get("MTTRNA_REGION_MATCH") == "yes" and
-                info.get("MTTRNA_ALLELE_EFFECT_MATCH") == "yes" and
-                info.get("MTTRNA_COMPENSATED") == "yes"
-            )
-        return True
+        passed, _reason = evaluate_trna_region_policy(info)
+        return passed
     if mode == "trna_loose_match":
         return (
             info.get("MTTRNA_REGION_MATCH") == "yes" or
@@ -2295,23 +2320,8 @@ def audit_final_filter_reason(info: Dict[str, str], mode: str) -> str:
         codon_status = str(info.get("MTCODON_STATUS", NA))
         if codon_status not in {"PASS", NA, "SKIPPED_NONCODING", "MISSING_COORD"}:
             return f"coding_codon_fail:{codon_status}"
-        trna_status = str(info.get("MTTRNA_STATUS", NA))
-        is_trna_variant = trna_status in {"OK", "NO_SPECIES_TRNA", "NO_HUMAN_TRNA"}
-        if is_trna_variant:
-            if info.get("MTTRNA_REGION_MATCH") != "yes":
-                return f"trna_region_mismatch:{info.get('MTTRNA_REGION_MATCH', NA)}"
-            if info.get("MTTRNA_ELEMENT_MATCH") != "yes":
-                return f"trna_element_mismatch:{info.get('MTTRNA_ELEMENT_MATCH', NA)}"
-            if info.get("MTTRNA_PAIR_STATE_MATCH") != "yes":
-                return f"trna_pair_state_mismatch:{info.get('MTTRNA_PAIR_STATE_MATCH', NA)}"
-            if info.get("MTTRNA_PAIR_POS_MATCH") != "yes":
-                return f"trna_pair_pos_mismatch:{info.get('MTTRNA_PAIR_POS_MATCH', NA)}"
-            if info.get("MTTRNA_ALLELE_EFFECT_MATCH") != "yes":
-                return f"trna_allele_effect_mismatch:{info.get('MTTRNA_ALLELE_EFFECT_MATCH', NA)}"
-            if info.get("MTTRNA_COMPENSATED") != "yes":
-                return f"trna_not_compensated:{info.get('MTTRNA_COMPENSATED', NA)}"
-            return "region_policy_unknown_trna_fail"
-        return "region_policy_nontrna_filtered"
+        _passed, reason = evaluate_trna_region_policy(info)
+        return reason
     return f"filtered_by_mode={mode}"
 
 def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final_filter_mode: str = "none") -> Counter:

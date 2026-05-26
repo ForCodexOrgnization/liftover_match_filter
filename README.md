@@ -203,8 +203,14 @@ region_policy
 
 `region_policy` applies region-aware final filtering:
 1) coding variants require `MTCODON_STATUS=PASS`;
-2) tRNA variants require `MTTRNA_STRICT_MATCH=yes`;
+2) tRNA variants use stem-vs-loop class-specific structural rules (see below);
 3) other noncoding variants (including control region) are kept.
+
+`region_policy` now applies class-specific tRNA filtering:
+- stem-stem: requires element match + pair_pos_match + pair_state_match + allele_effect_match + compensated
+- loop-loop: requires element match + same local position (`MTTRNA_S_LOCAL == MTTRNA_H_LOCAL`)
+- one-sided/no-overlap tRNA statuses are dropped (`DROP_ONE_SIDED_TRNA:*`)
+- class mismatch (stem vs loop) is dropped (`DROP_TRNA_REGION_MISMATCH:*`)
 
 `MTTRNA_STRICT_MATCH` logic:
 - loop-loop: `MTTRNA_REGION_MATCH=yes` AND `MTTRNA_ELEMENT_MATCH=yes`
