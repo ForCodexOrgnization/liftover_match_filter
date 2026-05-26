@@ -2191,10 +2191,12 @@ def trna_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], posmap_path:
 
 def evaluate_trna_region_policy(info: Dict[str, str]) -> Tuple[bool, str]:
     trna_status = str(info.get("MTTRNA_STATUS", NA))
-    if trna_status in {"NO_SPECIES_TRNA", "NO_HUMAN_TRNA", "NO_SPECIES_OR_HUMAN_TRNA"}:
-        return False, f"DROP_ONE_SIDED_TRNA:{trna_status}"
+    # Keep non-comparable/non-tRNA noncoding variants by default.
+    # Only apply structural filtering when both sides are comparable tRNA annotations (MTTRNA_STATUS=OK).
+    if trna_status in {"NO_SPECIES_TRNA", "NO_HUMAN_TRNA", "NO_SPECIES_OR_HUMAN_TRNA", "MISSING_SPECIES_COORD", NA}:
+        return True, f"PASS_NONCOMPARABLE_TRNA:{trna_status}"
     if trna_status != "OK":
-        return True, "PASS_NON_TRNA_OR_MISSING"
+        return True, f"PASS_NON_TRNA_OR_MISSING:{trna_status}"
 
     s_class = str(info.get("MTTRNA_S_CLASS", NA)).lower()
     h_class = str(info.get("MTTRNA_H_CLASS", NA)).lower()
@@ -2222,7 +2224,7 @@ def evaluate_trna_region_policy(info: Dict[str, str]) -> Tuple[bool, str]:
 
     if info.get("MTTRNA_REGION_MATCH") != "yes":
         return False, f"DROP_TRNA_REGION_MISMATCH:{info.get('MTTRNA_REGION_MATCH', NA)}"
-    return True, "PASS_TRNA_OTHER_CLASS"
+    return True, "PASS_TRNA_OTHER_CLASS_OR_UNKNOWN"
 
 def record_passes_filter(info: Dict[str, str], mode: str) -> bool:
     mode = mode.strip().lower()
@@ -2297,9 +2299,20 @@ def filter_vcf_file(in_vcf: str, out_vcf: str, mode: str, summary_path: Optional
 
 
 def audit_final_filter_reason(info: Dict[str, str], mode: str) -> str:
+    mode = mode.strip().lower()
+    if mode == "region_policy":
+        codon_status = str(info.get("MTCODON_STATUS", NA))
+        if codon_status == "PASS":
+            return "PASS_CODING_CODON"
+        if codon_status in {NA, "SKIPPED_NONCODING", "MISSING_COORD"}:
+            passed, reason = evaluate_trna_region_policy(info)
+            if passed:
+                return reason
+            return reason
+        return f"coding_codon_fail:{codon_status}"
+
     if record_passes_filter(info, mode):
         return "PASS"
-    mode = mode.strip().lower()
     if mode == "none":
         return "PASS"
     if mode == "codon_pass":
@@ -2316,12 +2329,6 @@ def audit_final_filter_reason(info: Dict[str, str], mode: str) -> str:
         return "no_loose_match(region/pair_state/pair_pos)"
     if mode == "codon_or_trna":
         return "failed_all(codon_pass,trna_region,pair_state,pair_pos)"
-    if mode == "region_policy":
-        codon_status = str(info.get("MTCODON_STATUS", NA))
-        if codon_status not in {"PASS", NA, "SKIPPED_NONCODING", "MISSING_COORD"}:
-            return f"coding_codon_fail:{codon_status}"
-        _passed, reason = evaluate_trna_region_policy(info)
-        return reason
     return f"filtered_by_mode={mode}"
 
 def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final_filter_mode: str = "none") -> Counter:

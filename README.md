@@ -209,7 +209,7 @@ region_policy
 `region_policy` now applies class-specific tRNA filtering:
 - stem-stem: requires element match + pair_pos_match + pair_state_match + allele_effect_match + compensated
 - loop-loop: requires element match + same local position (`MTTRNA_S_LOCAL == MTTRNA_H_LOCAL`)
-- one-sided/no-overlap tRNA statuses are dropped (`DROP_ONE_SIDED_TRNA:*`)
+- non-comparable tRNA statuses (`NO_SPECIES_TRNA`, `NO_HUMAN_TRNA`, `NO_SPECIES_OR_HUMAN_TRNA`) are kept by default as `PASS_NONCOMPARABLE_TRNA:*`
 - class mismatch (stem vs loop) is dropped (`DROP_TRNA_REGION_MISMATCH:*`)
 
 `MTTRNA_STRICT_MATCH` logic:
