@@ -2268,6 +2268,59 @@ def filter_vcf_file(in_vcf: str, out_vcf: str, mode: str, summary_path: Optional
     return stats
 
 
+
+def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final_filter_mode: str = "none") -> Counter:
+    fields = [
+        "species", "sample", "chrom", "pos", "ref", "alt", "lifted_pos",
+        "trna_pairing_type", "pair_pos", "human_pairing_type", "human_pair_pos",
+        "filter_label", "passes_final_filter",
+    ]
+    rows = []
+    stats = Counter()
+    with open_text(vcf_path, "rt") as fin:
+        for line in fin:
+            if line.startswith("#") or not line.strip():
+                continue
+            stats["input_records"] += 1
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 8:
+                stats["skipped_malformed"] += 1
+                continue
+            info = parse_info(parts[7])
+            row = {
+                "species": sample,
+                "sample": sample,
+                "chrom": parts[0],
+                "pos": parts[1],
+                "ref": parts[3],
+                "alt": parts[4],
+                "lifted_pos": info.get("MTLIFT_HUMAN_POS", parts[1]),
+                "trna_pairing_type": info.get("MTTRNA_S_PAIR_TYPE", NA),
+                "pair_pos": info.get("MTTRNA_S_PAIR_POS", NA),
+                "human_pairing_type": info.get("MTTRNA_H_PAIR_TYPE", NA),
+                "human_pair_pos": info.get("MTTRNA_H_PAIR_POS", NA),
+                "filter_label": info.get("MTCODON_STATUS", info.get("MTTRNA_STATUS", NA)),
+                "passes_final_filter": "yes" if record_passes_filter(info, final_filter_mode) else "no",
+            }
+            rows.append(row)
+            stats["written_rows"] += 1
+    write_tsv(output_tsv, rows, fields)
+    return stats
+
+
+def export_audit_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], summary_path: str, dirs: Dict[str, Path]) -> List[str]:
+    mode = cfg.setting("final_filter_mode", "none")
+    out_dir = ensure_dir(dirs["reports"] / sample)
+    outputs = []
+    for in_vcf in input_vcfs:
+        stem = strip_vcf_suffix(in_vcf)
+        out_tsv = str(out_dir / f"{stem}.audit_table.tsv")
+        log(f"Audit table: {in_vcf} -> {out_tsv}")
+        stats = build_variant_audit_table(in_vcf, out_tsv, sample, mode)
+        append_summary(summary_path, stats, "audit")
+        outputs.append(out_tsv)
+    return outputs
+
 def final_filter_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], summary_path: str, dirs: Dict[str, Path]) -> List[str]:
     mode = cfg.setting("final_filter_mode", "none")
     out_dir = ensure_dir(dirs["vcf_final"] / sample)
@@ -2337,6 +2390,8 @@ def run_sample(cfg: PipeConfig, sample: str) -> None:
             append_summary(summary_path, qc_stats, "trna_gene_qc")
     if cfg.setting_bool("run_final_filter", False):
         current_vcfs = final_filter_stage(cfg, sample, current_vcfs, summary_path, dirs)
+    if cfg.setting_bool("export_variant_audit_table", False) and current_vcfs:
+        export_audit_stage(cfg, sample, current_vcfs, summary_path, dirs)
     if cfg.setting_bool("keep_tmp", True) is False:
         shutil.rmtree(work_dir, ignore_errors=True)
     log(f"Done sample={sample}")
@@ -2393,6 +2448,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--input", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--mode", default=None)
+
+    p = sub.add_parser("export-audit-table", help="Export per-variant audit table from one annotated VCF")
+    p.add_argument("--config", required=True)
+    p.add_argument("--sample", required=True)
+    p.add_argument("--input", required=True)
+    p.add_argument("--output", required=True)
     return ap
 
 
@@ -2466,6 +2527,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.cmd == "filter-vcf":
         mode = args.mode if args.mode is not None else cfg.setting("final_filter_mode", "none")
         filter_vcf_file(args.input, args.output, mode)
+        return 0
+    if args.cmd == "export-audit-table":
+        mode = cfg.setting("final_filter_mode", "none")
+        build_variant_audit_table(args.input, args.output, args.sample, mode)
         return 0
     die(f"Unknown command: {args.cmd}")
     return 2

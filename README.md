@@ -169,6 +169,16 @@ python3 mt_pipeline.py filter-vcf \
   --output sample.final.vcf
 ```
 
+Export a manual-check audit table from annotated/final VCF:
+
+```bash
+python3 mt_pipeline.py export-audit-table \
+  --config config.example.ini \
+  --sample panTro6 \
+  --input sample.final.vcf \
+  --output sample.final.audit_table.tsv
+```
+
 Supported filter modes:
 
 ```text
@@ -209,3 +219,8 @@ human_trna_lookup_ignore_chrom = 0
 ```
 
 `species_trna_lookup_ignore_chrom=1` makes species tRNA lookup key on position only, and `species_trna_coord_space=rotated` switches species lookup to `INFO/MTLIFT_ORIG_ROT_POS`.
+
+
+Audit table columns include: species, sample, chrom, pos, ref, alt, lifted_pos, species tRNA pair type/pos, human tRNA pair type/pos, filter label, and whether it passes the configured final filter mode.
+
+Set `[settings] export_variant_audit_table = 1` in `config.ini` if you want `run-sample` to auto-export audit tables.
