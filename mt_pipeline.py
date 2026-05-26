@@ -2269,12 +2269,63 @@ def filter_vcf_file(in_vcf: str, out_vcf: str, mode: str, summary_path: Optional
 
 
 
+
+
+def audit_final_filter_reason(info: Dict[str, str], mode: str) -> str:
+    if record_passes_filter(info, mode):
+        return "PASS"
+    mode = mode.strip().lower()
+    if mode == "none":
+        return "PASS"
+    if mode == "codon_pass":
+        return f"codon_status={info.get('MTCODON_STATUS', NA)}"
+    if mode == "trna_region_match":
+        return f"trna_region_match={info.get('MTTRNA_REGION_MATCH', NA)}"
+    if mode == "trna_pair_state_match":
+        return f"trna_pair_state_match={info.get('MTTRNA_PAIR_STATE_MATCH', NA)}"
+    if mode == "trna_pair_pos_match":
+        return f"trna_pair_pos_match={info.get('MTTRNA_PAIR_POS_MATCH', NA)}"
+    if mode == "trna_strict_match":
+        return f"trna_strict_match={info.get('MTTRNA_STRICT_MATCH', NA)}"
+    if mode == "trna_loose_match":
+        return "no_loose_match(region/pair_state/pair_pos)"
+    if mode == "codon_or_trna":
+        return "failed_all(codon_pass,trna_region,pair_state,pair_pos)"
+    if mode == "region_policy":
+        codon_status = str(info.get("MTCODON_STATUS", NA))
+        if codon_status not in {"PASS", NA, "SKIPPED_NONCODING", "MISSING_COORD"}:
+            return f"coding_codon_fail:{codon_status}"
+        trna_status = str(info.get("MTTRNA_STATUS", NA))
+        is_trna_variant = trna_status in {"OK", "NO_SPECIES_TRNA", "NO_HUMAN_TRNA"}
+        if is_trna_variant:
+            if info.get("MTTRNA_REGION_MATCH") != "yes":
+                return f"trna_region_mismatch:{info.get('MTTRNA_REGION_MATCH', NA)}"
+            if info.get("MTTRNA_ELEMENT_MATCH") != "yes":
+                return f"trna_element_mismatch:{info.get('MTTRNA_ELEMENT_MATCH', NA)}"
+            if info.get("MTTRNA_PAIR_STATE_MATCH") != "yes":
+                return f"trna_pair_state_mismatch:{info.get('MTTRNA_PAIR_STATE_MATCH', NA)}"
+            if info.get("MTTRNA_PAIR_POS_MATCH") != "yes":
+                return f"trna_pair_pos_mismatch:{info.get('MTTRNA_PAIR_POS_MATCH', NA)}"
+            if info.get("MTTRNA_ALLELE_EFFECT_MATCH") != "yes":
+                return f"trna_allele_effect_mismatch:{info.get('MTTRNA_ALLELE_EFFECT_MATCH', NA)}"
+            if info.get("MTTRNA_COMPENSATED") != "yes":
+                return f"trna_not_compensated:{info.get('MTTRNA_COMPENSATED', NA)}"
+            return "region_policy_unknown_trna_fail"
+        return "region_policy_nontrna_filtered"
+    return f"filtered_by_mode={mode}"
+
 def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final_filter_mode: str = "none") -> Counter:
     inferred_sample = strip_vcf_suffix(vcf_path)
     fields = [
         "species", "sample", "chrom", "pos", "ref", "alt", "lifted_pos",
-        "trna_status", "trna_region_match", "trna_species_id", "trna_human_id", "trna_pairing_type", "pair_pos", "human_pairing_type", "human_pair_pos",
-        "filter_label", "passes_final_filter",
+        "trna_status", "species_local_pos", "human_local_pos",
+        "species_struct_class", "human_struct_class", "species_struct_element", "human_struct_element",
+        "struct_class_match", "struct_element_match",
+        "trna_region_match", "trna_species_id", "trna_human_id",
+        "trna_pairing_type", "pair_pos", "human_pairing_type", "human_pair_pos",
+        "species_pair_local_pos", "human_pair_local_pos", "species_pair_pos_lifted_to_human",
+        "pair_pos_match", "pair_type_match", "pair_state_match",
+        "filter_label", "passes_final_filter", "final_filter_reason",
     ]
     rows = []
     stats = Counter()
@@ -2297,6 +2348,14 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
                 "alt": parts[4],
                 "lifted_pos": info.get("MTLIFT_HUMAN_POS", parts[1]),
                 "trna_status": info.get("MTTRNA_STATUS", NA),
+                "species_local_pos": info.get("MTTRNA_S_LOCAL", NA),
+                "human_local_pos": info.get("MTTRNA_H_LOCAL", NA),
+                "species_struct_class": info.get("MTTRNA_S_CLASS", NA),
+                "human_struct_class": info.get("MTTRNA_H_CLASS", NA),
+                "species_struct_element": info.get("MTTRNA_S_ELEMENT", NA),
+                "human_struct_element": info.get("MTTRNA_H_ELEMENT", NA),
+                "struct_class_match": info.get("MTTRNA_CLASS_MATCH", NA),
+                "struct_element_match": info.get("MTTRNA_ELEMENT_MATCH", NA),
                 "trna_region_match": info.get("MTTRNA_REGION_MATCH", NA),
                 "trna_species_id": info.get("MTTRNA_S_ID", NA),
                 "trna_human_id": info.get("MTTRNA_H_ID", NA),
@@ -2304,8 +2363,15 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
                 "pair_pos": info.get("MTTRNA_S_PAIR_POS", NA),
                 "human_pairing_type": info.get("MTTRNA_H_PAIR_TYPE", NA),
                 "human_pair_pos": info.get("MTTRNA_H_PAIR_POS", NA),
+                "species_pair_local_pos": info.get("MTTRNA_S_PAIR_LOCAL", NA),
+                "human_pair_local_pos": info.get("MTTRNA_H_PAIR_LOCAL", NA),
+                "species_pair_pos_lifted_to_human": info.get("MTTRNA_S_PAIR_LIFTED_HPOS", NA),
+                "pair_pos_match": info.get("MTTRNA_PAIR_POS_MATCH", NA),
+                "pair_type_match": info.get("MTTRNA_PAIR_TYPE_MATCH", NA),
+                "pair_state_match": info.get("MTTRNA_PAIR_STATE_MATCH", NA),
                 "filter_label": info.get("MTCODON_STATUS", info.get("MTTRNA_STATUS", NA)),
                 "passes_final_filter": "yes" if record_passes_filter(info, final_filter_mode) else "no",
+                "final_filter_reason": audit_final_filter_reason(info, final_filter_mode),
             }
             rows.append(row)
             stats["written_rows"] += 1

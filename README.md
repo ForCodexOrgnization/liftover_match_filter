@@ -229,7 +229,7 @@ human_trna_lookup_ignore_chrom = 0
 `species_trna_lookup_ignore_chrom=1` makes species tRNA lookup key on position only, and `species_trna_coord_space=rotated` switches species lookup to `INFO/MTLIFT_ORIG_ROT_POS`.
 
 
-Audit table columns include: species, sample (defaults to input VCF stem unless INFO/MTLIFT_SAMPLE exists), chrom, pos, ref, alt, lifted_pos, trna_status, trna_region_match, trna_species_id, trna_human_id, species tRNA pair type/pos, human tRNA pair type/pos, filter label, and whether it passes the configured final filter mode. If all tRNA columns are NA, the input VCF likely was not passed through the tRNA annotation stage.
+Audit table columns include species/sample, variant coordinates/alleles, lifted_pos, tRNA local positions, structure class/element and their match flags, stem-pair local/genomic positions (including lifted species pair position), pair type/state/position match flags, and final filter fields (`filter_label`, `passes_final_filter`, `final_filter_reason`). If all tRNA columns are NA or `trna_status` is `NO_SPECIES_OR_HUMAN_TRNA`, the variant may be outside callable tRNA overlap under your current annotation inputs.
 
 Set `[settings] export_variant_audit_table = 1` in `config.ini` if you want `run-sample` to auto-export audit tables.
 When `[settings] merge_audit_tables = 1` (default), each run also refreshes one merged file for all samples at `[paths] merged_audit_table`.
