@@ -1028,6 +1028,9 @@ def load_all_primate_position_codon_table(path: str | Path) -> Dict[Tuple[str, i
                 continue
             p = line.rstrip("\n").split("\t")
             pos = int(p[idx["pos"]])
+            qc = {}
+            if trna_qc_lookup is not None:
+                qc = trna_qc_lookup.get((str(info.get("MTTRNA_S_ID", NA)), str(info.get("MTTRNA_H_ID", NA))), {})
             row = {
                 "gene": harmonize_gene_name(p[idx["gene"]]),
                 "strand": p[idx["strand"]],
@@ -2188,29 +2191,60 @@ def trna_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], posmap_path:
 # Optional final filter
 # -----------------------------------------------------------------------------
 
+
+def evaluate_trna_region_policy(info: Dict[str, str]) -> Tuple[bool, str]:
+    trna_status = str(info.get("MTTRNA_STATUS", NA))
+    # Keep non-comparable/non-tRNA noncoding variants by default.
+    # Only apply structural filtering when both sides are comparable tRNA annotations (MTTRNA_STATUS=OK).
+    if trna_status in {"NO_SPECIES_TRNA", "NO_HUMAN_TRNA", "NO_SPECIES_OR_HUMAN_TRNA", "MISSING_SPECIES_COORD", NA}:
+        return True, f"PASS_NONCOMPARABLE_TRNA:{trna_status}"
+    if trna_status != "OK":
+        return True, f"PASS_NON_TRNA_OR_MISSING:{trna_status}"
+
+    s_class = str(info.get("MTTRNA_S_CLASS", NA)).lower()
+    h_class = str(info.get("MTTRNA_H_CLASS", NA)).lower()
+    if s_class != h_class:
+        return False, f"DROP_TRNA_REGION_MISMATCH:{s_class}_vs_{h_class}"
+
+    if info.get("MTTRNA_ELEMENT_MATCH") != "yes":
+        return False, f"DROP_TRNA_ELEMENT_MISMATCH:{info.get('MTTRNA_ELEMENT_MATCH', NA)}"
+
+    if s_class == "loop":
+        if info.get("MTTRNA_S_LOCAL") != info.get("MTTRNA_H_LOCAL"):
+            return False, f"DROP_LOOP_LOCAL_POS_MISMATCH:{info.get('MTTRNA_S_LOCAL', NA)}_vs_{info.get('MTTRNA_H_LOCAL', NA)}"
+        return True, "PASS_LOOP_RULE"
+
+    if s_class == "stem":
+        if info.get("MTTRNA_PAIR_POS_MATCH") != "yes":
+            return False, f"DROP_STEM_PAIR_POS_MISMATCH:{info.get('MTTRNA_PAIR_POS_MATCH', NA)}"
+        if info.get("MTTRNA_PAIR_STATE_MATCH") != "yes":
+            return False, f"DROP_STEM_PAIR_STATE_MISMATCH:{info.get('MTTRNA_PAIR_STATE_MATCH', NA)}"
+        if info.get("MTTRNA_ALLELE_EFFECT_MATCH") != "yes":
+            return False, f"DROP_STEM_ALLELE_EFFECT_MISMATCH:{info.get('MTTRNA_ALLELE_EFFECT_MATCH', NA)}"
+        if info.get("MTTRNA_COMPENSATED") != "yes":
+            return False, f"DROP_STEM_NOT_COMPENSATED:{info.get('MTTRNA_COMPENSATED', NA)}"
+        return True, "PASS_STEM_RULE"
+
+    if info.get("MTTRNA_REGION_MATCH") != "yes":
+        return False, f"DROP_TRNA_REGION_MISMATCH:{info.get('MTTRNA_REGION_MATCH', NA)}"
+    return True, "PASS_TRNA_OTHER_CLASS_OR_UNKNOWN"
+
 def record_passes_filter(info: Dict[str, str], mode: str) -> bool:
     mode = mode.strip().lower()
     if mode in {"none", "", "off"}:
         return True
     if mode == "region_policy":
-        # 1) coding: require strict codon PASS
-        # 2) tRNA: require region/pair-state/pair-position match
-        # 3) other noncoding: keep by default
         codon_status = str(info.get("MTCODON_STATUS", NA))
         if codon_status == "PASS":
             return True
-        if codon_status not in {NA, "SKIPPED_NONCODING", "MISSING_COORD"}:
+        if codon_status == "SKIPPED_NONCODING":
+            passed, _reason = evaluate_trna_region_policy(info)
+            return passed
+        # Be conservative for codon-unresolvable records in region_policy.
+        # NA usually means codon annotation missing; MISSING_COORD means coding state is unresolved.
+        if codon_status in {NA, "MISSING_COORD"}:
             return False
-
-        trna_status = str(info.get("MTTRNA_STATUS", NA))
-        is_trna_variant = trna_status in {"OK", "NO_SPECIES_TRNA", "NO_HUMAN_TRNA"}
-        if is_trna_variant:
-            return (
-                info.get("MTTRNA_REGION_MATCH") == "yes" and
-                info.get("MTTRNA_ALLELE_EFFECT_MATCH") == "yes" and
-                info.get("MTTRNA_COMPENSATED") == "yes"
-            )
-        return True
+        return False
     if mode == "trna_loose_match":
         return (
             info.get("MTTRNA_REGION_MATCH") == "yes" or
@@ -2267,6 +2301,199 @@ def filter_vcf_file(in_vcf: str, out_vcf: str, mode: str, summary_path: Optional
         append_summary(summary_path, stats, "final_filter")
     return stats
 
+
+
+
+
+def audit_final_filter_reason(info: Dict[str, str], mode: str) -> str:
+    mode = mode.strip().lower()
+    if mode == "region_policy":
+        codon_status = str(info.get("MTCODON_STATUS", NA))
+        if codon_status == "PASS":
+            return "PASS_CODING_CODON"
+        if codon_status == "SKIPPED_NONCODING":
+            _passed, reason = evaluate_trna_region_policy(info)
+            return reason
+        if codon_status == "MISSING_COORD":
+            return "coding_codon_unresolved:MISSING_COORD"
+        if codon_status == NA:
+            return "coding_codon_unresolved:NA"
+        return f"coding_codon_fail:{codon_status}"
+
+    if record_passes_filter(info, mode):
+        return "PASS"
+    if mode == "none":
+        return "PASS"
+    if mode == "codon_pass":
+        return f"codon_status={info.get('MTCODON_STATUS', NA)}"
+    if mode == "trna_region_match":
+        return f"trna_region_match={info.get('MTTRNA_REGION_MATCH', NA)}"
+    if mode == "trna_pair_state_match":
+        return f"trna_pair_state_match={info.get('MTTRNA_PAIR_STATE_MATCH', NA)}"
+    if mode == "trna_pair_pos_match":
+        return f"trna_pair_pos_match={info.get('MTTRNA_PAIR_POS_MATCH', NA)}"
+    if mode == "trna_strict_match":
+        return f"trna_strict_match={info.get('MTTRNA_STRICT_MATCH', NA)}"
+    if mode == "trna_loose_match":
+        return "no_loose_match(region/pair_state/pair_pos)"
+    if mode == "codon_or_trna":
+        return "failed_all(codon_pass,trna_region,pair_state,pair_pos)"
+    return f"filtered_by_mode={mode}"
+
+def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final_filter_mode: str = "none", trna_qc_lookup: Optional[Dict[Tuple[str, str], Dict[str, str]]] = None) -> Counter:
+    inferred_sample = strip_vcf_suffix(vcf_path)
+    fields = [
+        "species", "sample", "chrom", "pos", "ref", "alt", "lifted_pos",
+        "trna_status", "species_local_pos", "human_local_pos",
+        "species_struct_class", "human_struct_class", "species_struct_element", "human_struct_element",
+        "struct_class_match", "struct_element_match",
+        "trna_region_match", "trna_species_id", "trna_human_id",
+        "trna_pairing_type", "pair_pos", "human_pairing_type", "human_pair_pos",
+        "species_pair_local_pos", "human_pair_local_pos", "species_pair_pos_lifted_to_human",
+        "pair_pos_match", "pair_type_match", "pair_state_match",
+        "s_alt_pair_type", "h_alt_pair_type", "s_alt_effect", "h_alt_effect", "allele_effect_match", "compensated",
+        "filter_label", "passes_final_filter", "final_filter_reason",
+        "interval_overlap_ratio", "lift_to_human_trna_interval_pass", "orientation_match", "isotype_match", "anticodon_match",
+        "species_isotype", "species_anticodon", "best_human_isotype", "best_human_anticodon",
+    ]
+    rows = []
+    stats = Counter()
+    with open_text(vcf_path, "rt") as fin:
+        for line in fin:
+            if line.startswith("#") or not line.strip():
+                continue
+            stats["input_records"] += 1
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 8:
+                stats["skipped_malformed"] += 1
+                continue
+            info = parse_info(parts[7])
+            qc = {}
+            if trna_qc_lookup is not None:
+                qc = trna_qc_lookup.get((str(info.get("MTTRNA_S_ID", NA)), str(info.get("MTTRNA_H_ID", NA))), {})
+            row = {
+                "species": sample,
+                "sample": info.get("MTLIFT_SAMPLE", inferred_sample),
+                "chrom": parts[0],
+                "pos": parts[1],
+                "ref": parts[3],
+                "alt": parts[4],
+                "lifted_pos": info.get("MTLIFT_HUMAN_POS", parts[1]),
+                "trna_status": info.get("MTTRNA_STATUS", NA),
+                "species_local_pos": info.get("MTTRNA_S_LOCAL", NA),
+                "human_local_pos": info.get("MTTRNA_H_LOCAL", NA),
+                "species_struct_class": info.get("MTTRNA_S_CLASS", NA),
+                "human_struct_class": info.get("MTTRNA_H_CLASS", NA),
+                "species_struct_element": info.get("MTTRNA_S_ELEMENT", NA),
+                "human_struct_element": info.get("MTTRNA_H_ELEMENT", NA),
+                "struct_class_match": info.get("MTTRNA_CLASS_MATCH", NA),
+                "struct_element_match": info.get("MTTRNA_ELEMENT_MATCH", NA),
+                "trna_region_match": info.get("MTTRNA_REGION_MATCH", NA),
+                "trna_species_id": info.get("MTTRNA_S_ID", NA),
+                "trna_human_id": info.get("MTTRNA_H_ID", NA),
+                "trna_pairing_type": info.get("MTTRNA_S_PAIR_TYPE", NA),
+                "pair_pos": info.get("MTTRNA_S_PAIR_POS", NA),
+                "human_pairing_type": info.get("MTTRNA_H_PAIR_TYPE", NA),
+                "human_pair_pos": info.get("MTTRNA_H_PAIR_POS", NA),
+                "species_pair_local_pos": info.get("MTTRNA_S_PAIR_LOCAL", NA),
+                "human_pair_local_pos": info.get("MTTRNA_H_PAIR_LOCAL", NA),
+                "species_pair_pos_lifted_to_human": info.get("MTTRNA_S_PAIR_LIFTED_HPOS", NA),
+                "pair_pos_match": info.get("MTTRNA_PAIR_POS_MATCH", NA),
+                "pair_type_match": info.get("MTTRNA_PAIR_TYPE_MATCH", NA),
+                "pair_state_match": info.get("MTTRNA_PAIR_STATE_MATCH", NA),
+                "s_alt_pair_type": info.get("MTTRNA_S_ALT_PAIR_TYPE", NA),
+                "h_alt_pair_type": info.get("MTTRNA_H_ALT_PAIR_TYPE", NA),
+                "s_alt_effect": info.get("MTTRNA_S_ALT_EFFECT", NA),
+                "h_alt_effect": info.get("MTTRNA_H_ALT_EFFECT", NA),
+                "allele_effect_match": info.get("MTTRNA_ALLELE_EFFECT_MATCH", NA),
+                "compensated": info.get("MTTRNA_COMPENSATED", NA),
+                "filter_label": info.get("MTCODON_STATUS", info.get("MTTRNA_STATUS", NA)),
+                "passes_final_filter": "yes" if record_passes_filter(info, final_filter_mode) else "no",
+                "final_filter_reason": audit_final_filter_reason(info, final_filter_mode),
+                "interval_overlap_ratio": qc.get("interval_overlap_ratio", NA),
+                "lift_to_human_trna_interval_pass": qc.get("lift_to_human_trna_interval_pass", NA),
+                "orientation_match": qc.get("orientation_match", NA),
+                "isotype_match": qc.get("isotype_match", NA),
+                "anticodon_match": qc.get("anticodon_match", NA),
+                "species_isotype": qc.get("species_isotype", NA),
+                "species_anticodon": qc.get("species_anticodon", NA),
+                "best_human_isotype": qc.get("best_human_isotype", NA),
+                "best_human_anticodon": qc.get("best_human_anticodon", NA),
+            }
+            rows.append(row)
+            stats["written_rows"] += 1
+            if row["trna_status"] != NA:
+                stats["trna_annotated_rows"] += 1
+    write_tsv(output_tsv, rows, fields)
+    return stats
+
+
+
+
+def load_trna_gene_qc_lookup(qc_tsv: str) -> Dict[Tuple[str, str], Dict[str, str]]:
+    wanted = {
+        "interval_overlap_ratio", "lift_to_human_trna_interval_pass", "orientation_match", "isotype_match", "anticodon_match",
+        "species_isotype", "species_anticodon", "best_human_isotype", "best_human_anticodon",
+    }
+    out: Dict[Tuple[str, str], Dict[str, str]] = {}
+    if (not qc_tsv) or (not Path(qc_tsv).exists()):
+        return out
+    with open_text(qc_tsv, "rt") as fin:
+        r = csv.DictReader(fin, delimiter="	")
+        for row in r:
+            sid = str(row.get("species_trna_id", NA))
+            hid = str(row.get("best_human_trna_id", NA))
+            key = (sid, hid)
+            out[key] = {k: str(row.get(k, NA)) for k in wanted}
+    return out
+
+def merge_audit_tables(audit_tsvs: Sequence[str], merged_output: str) -> Counter:
+    stats = Counter()
+    if not audit_tsvs:
+        return stats
+    header = None
+    ensure_dir(Path(merged_output).parent)
+    with open_text(merged_output, "wt") as out:
+        for tsv in audit_tsvs:
+            with open_text(tsv, "rt") as fin:
+                for i, line in enumerate(fin):
+                    if i == 0:
+                        if header is None:
+                            header = line
+                            out.write(line)
+                        elif line != header:
+                            die(f"Audit table header mismatch: {tsv}")
+                        continue
+                    if not line.strip():
+                        continue
+                    out.write(line)
+                    stats["merged_rows"] += 1
+            stats["merged_files"] += 1
+    return stats
+
+def export_audit_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], summary_path: str, dirs: Dict[str, Path]) -> List[str]:
+    mode = cfg.setting("final_filter_mode", "none")
+    out_dir = ensure_dir(dirs["reports"] / sample)
+    outputs = []
+    for in_vcf in input_vcfs:
+        stem = strip_vcf_suffix(in_vcf)
+        out_tsv = str(out_dir / f"{stem}.audit_table.tsv")
+        log(f"Audit table: {in_vcf} -> {out_tsv}")
+        qc_lookup = load_trna_gene_qc_lookup(str(dirs["reports"] / f"{sample}.trna_gene_liftover_qc.tsv"))
+        stats = build_variant_audit_table(in_vcf, out_tsv, sample, mode, qc_lookup)
+        if stats.get("trna_annotated_rows", 0) == 0:
+            warn(f"Audit table has no MTTRNA_* annotations: {in_vcf}. Check run_trna_annotate and whether you exported from pre-trna stage.")
+        append_summary(summary_path, stats, "audit")
+        outputs.append(out_tsv)
+
+    if outputs and cfg.setting_bool("merge_audit_tables", True):
+        pattern = str(dirs["reports"] / "*" / "*.audit_table.tsv")
+        all_audits = sorted(glob.glob(pattern))
+        merged_path = cfg.path_get("merged_audit_table", "{reports_dir}/all_samples.audit_table.tsv")
+        merge_stats = merge_audit_tables(all_audits, merged_path)
+        append_summary(summary_path, merge_stats, "audit_merge")
+        log(f"Merged audit table (all samples): {merged_path}")
+    return outputs
 
 def final_filter_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], summary_path: str, dirs: Dict[str, Path]) -> List[str]:
     mode = cfg.setting("final_filter_mode", "none")
@@ -2335,8 +2562,13 @@ def run_sample(cfg: PipeConfig, sample: str) -> None:
                 qc_path,
             )
             append_summary(summary_path, qc_stats, "trna_gene_qc")
+    audit_input_vcfs = list(current_vcfs)
     if cfg.setting_bool("run_final_filter", False):
         current_vcfs = final_filter_stage(cfg, sample, current_vcfs, summary_path, dirs)
+        if cfg.setting_bool("audit_from_final_vcf", False):
+            audit_input_vcfs = list(current_vcfs)
+    if cfg.setting_bool("export_variant_audit_table", False) and audit_input_vcfs:
+        export_audit_stage(cfg, sample, audit_input_vcfs, summary_path, dirs)
     if cfg.setting_bool("keep_tmp", True) is False:
         shutil.rmtree(work_dir, ignore_errors=True)
     log(f"Done sample={sample}")
@@ -2393,6 +2625,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--input", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--mode", default=None)
+
+    p = sub.add_parser("export-audit-table", help="Export per-variant audit table from one annotated VCF")
+    p.add_argument("--config", required=True)
+    p.add_argument("--sample", required=True)
+    p.add_argument("--input", required=True)
+    p.add_argument("--output", required=True)
+
+    p = sub.add_parser("merge-audit-tables", help="Merge all per-sample audit tables into one TSV")
+    p.add_argument("--config", required=True)
+    p.add_argument("--output", default=None)
     return ap
 
 
@@ -2466,6 +2708,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.cmd == "filter-vcf":
         mode = args.mode if args.mode is not None else cfg.setting("final_filter_mode", "none")
         filter_vcf_file(args.input, args.output, mode)
+        return 0
+    if args.cmd == "export-audit-table":
+        mode = cfg.setting("final_filter_mode", "none")
+        dirs = make_outdirs(cfg)
+        qc_lookup = load_trna_gene_qc_lookup(str(dirs["reports"] / f"{args.sample}.trna_gene_liftover_qc.tsv"))
+        stats = build_variant_audit_table(args.input, args.output, args.sample, mode, qc_lookup)
+        if stats.get("trna_annotated_rows", 0) == 0:
+            warn(f"Audit table has no MTTRNA_* annotations: {args.input}. Check run_trna_annotate and input VCF stage.")
+        return 0
+    if args.cmd == "merge-audit-tables":
+        dirs = make_outdirs(cfg)
+        pattern = str(dirs["reports"] / "*" / "*.audit_table.tsv")
+        audit_tsvs = sorted(glob.glob(pattern))
+        if not audit_tsvs:
+            die(f"No audit tables found: {pattern}")
+        out = args.output if args.output is not None else cfg.path_get("merged_audit_table", "{reports_dir}/all_samples.audit_table.tsv")
+        merge_audit_tables(audit_tsvs, out)
+        log(f"Merged {len(audit_tsvs)} audit tables -> {out}")
         return 0
     die(f"Unknown command: {args.cmd}")
     return 2
