@@ -241,3 +241,9 @@ Audit table columns include species/sample, variant coordinates/alleles, lifted_
 Set `[settings] export_variant_audit_table = 1` in `config.ini` if you want `run-sample` to auto-export audit tables.
 When `[settings] merge_audit_tables = 1` (default), each run also refreshes one merged file for all samples at `[paths] merged_audit_table`.
 By default (`audit_from_final_vcf = 0`), audit export uses pre-final-filter VCFs so the table includes **all variants** (including records that would fail final filtering).
+
+
+Audit export can also append tRNA gene-liftover QC columns when `{reports_dir}/{sample}.trna_gene_liftover_qc.tsv` exists: `interval_overlap_ratio`, `lift_to_human_trna_interval_pass`, `orientation_match`, `isotype_match`, `anticodon_match`, `species_isotype`, `species_anticodon`, `best_human_isotype`, `best_human_anticodon`.
+
+
+Audit table now also includes ALT-aware stem pairing diagnostics: `s_alt_pair_type`, `h_alt_pair_type`, `s_alt_effect`, `h_alt_effect`, `allele_effect_match`, and `compensated` (from `MTTRNA_*` INFO tags).

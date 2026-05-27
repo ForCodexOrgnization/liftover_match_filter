@@ -1028,6 +1028,9 @@ def load_all_primate_position_codon_table(path: str | Path) -> Dict[Tuple[str, i
                 continue
             p = line.rstrip("\n").split("\t")
             pos = int(p[idx["pos"]])
+            qc = {}
+            if trna_qc_lookup is not None:
+                qc = trna_qc_lookup.get((str(info.get("MTTRNA_S_ID", NA)), str(info.get("MTTRNA_H_ID", NA))), {})
             row = {
                 "gene": harmonize_gene_name(p[idx["gene"]]),
                 "strand": p[idx["strand"]],
@@ -2337,7 +2340,7 @@ def audit_final_filter_reason(info: Dict[str, str], mode: str) -> str:
         return "failed_all(codon_pass,trna_region,pair_state,pair_pos)"
     return f"filtered_by_mode={mode}"
 
-def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final_filter_mode: str = "none") -> Counter:
+def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final_filter_mode: str = "none", trna_qc_lookup: Optional[Dict[Tuple[str, str], Dict[str, str]]] = None) -> Counter:
     inferred_sample = strip_vcf_suffix(vcf_path)
     fields = [
         "species", "sample", "chrom", "pos", "ref", "alt", "lifted_pos",
@@ -2348,7 +2351,10 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
         "trna_pairing_type", "pair_pos", "human_pairing_type", "human_pair_pos",
         "species_pair_local_pos", "human_pair_local_pos", "species_pair_pos_lifted_to_human",
         "pair_pos_match", "pair_type_match", "pair_state_match",
+        "s_alt_pair_type", "h_alt_pair_type", "s_alt_effect", "h_alt_effect", "allele_effect_match", "compensated",
         "filter_label", "passes_final_filter", "final_filter_reason",
+        "interval_overlap_ratio", "lift_to_human_trna_interval_pass", "orientation_match", "isotype_match", "anticodon_match",
+        "species_isotype", "species_anticodon", "best_human_isotype", "best_human_anticodon",
     ]
     rows = []
     stats = Counter()
@@ -2362,6 +2368,9 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
                 stats["skipped_malformed"] += 1
                 continue
             info = parse_info(parts[7])
+            qc = {}
+            if trna_qc_lookup is not None:
+                qc = trna_qc_lookup.get((str(info.get("MTTRNA_S_ID", NA)), str(info.get("MTTRNA_H_ID", NA))), {})
             row = {
                 "species": sample,
                 "sample": info.get("MTLIFT_SAMPLE", inferred_sample),
@@ -2392,9 +2401,24 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
                 "pair_pos_match": info.get("MTTRNA_PAIR_POS_MATCH", NA),
                 "pair_type_match": info.get("MTTRNA_PAIR_TYPE_MATCH", NA),
                 "pair_state_match": info.get("MTTRNA_PAIR_STATE_MATCH", NA),
+                "s_alt_pair_type": info.get("MTTRNA_S_ALT_PAIR_TYPE", NA),
+                "h_alt_pair_type": info.get("MTTRNA_H_ALT_PAIR_TYPE", NA),
+                "s_alt_effect": info.get("MTTRNA_S_ALT_EFFECT", NA),
+                "h_alt_effect": info.get("MTTRNA_H_ALT_EFFECT", NA),
+                "allele_effect_match": info.get("MTTRNA_ALLELE_EFFECT_MATCH", NA),
+                "compensated": info.get("MTTRNA_COMPENSATED", NA),
                 "filter_label": info.get("MTCODON_STATUS", info.get("MTTRNA_STATUS", NA)),
                 "passes_final_filter": "yes" if record_passes_filter(info, final_filter_mode) else "no",
                 "final_filter_reason": audit_final_filter_reason(info, final_filter_mode),
+                "interval_overlap_ratio": qc.get("interval_overlap_ratio", NA),
+                "lift_to_human_trna_interval_pass": qc.get("lift_to_human_trna_interval_pass", NA),
+                "orientation_match": qc.get("orientation_match", NA),
+                "isotype_match": qc.get("isotype_match", NA),
+                "anticodon_match": qc.get("anticodon_match", NA),
+                "species_isotype": qc.get("species_isotype", NA),
+                "species_anticodon": qc.get("species_anticodon", NA),
+                "best_human_isotype": qc.get("best_human_isotype", NA),
+                "best_human_anticodon": qc.get("best_human_anticodon", NA),
             }
             rows.append(row)
             stats["written_rows"] += 1
@@ -2404,6 +2428,24 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
     return stats
 
 
+
+
+def load_trna_gene_qc_lookup(qc_tsv: str) -> Dict[Tuple[str, str], Dict[str, str]]:
+    wanted = {
+        "interval_overlap_ratio", "lift_to_human_trna_interval_pass", "orientation_match", "isotype_match", "anticodon_match",
+        "species_isotype", "species_anticodon", "best_human_isotype", "best_human_anticodon",
+    }
+    out: Dict[Tuple[str, str], Dict[str, str]] = {}
+    if (not qc_tsv) or (not Path(qc_tsv).exists()):
+        return out
+    with open_text(qc_tsv, "rt") as fin:
+        r = csv.DictReader(fin, delimiter="	")
+        for row in r:
+            sid = str(row.get("species_trna_id", NA))
+            hid = str(row.get("best_human_trna_id", NA))
+            key = (sid, hid)
+            out[key] = {k: str(row.get(k, NA)) for k in wanted}
+    return out
 
 def merge_audit_tables(audit_tsvs: Sequence[str], merged_output: str) -> Counter:
     stats = Counter()
@@ -2437,7 +2479,8 @@ def export_audit_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], summ
         stem = strip_vcf_suffix(in_vcf)
         out_tsv = str(out_dir / f"{stem}.audit_table.tsv")
         log(f"Audit table: {in_vcf} -> {out_tsv}")
-        stats = build_variant_audit_table(in_vcf, out_tsv, sample, mode)
+        qc_lookup = load_trna_gene_qc_lookup(str(dirs["reports"] / f"{sample}.trna_gene_liftover_qc.tsv"))
+        stats = build_variant_audit_table(in_vcf, out_tsv, sample, mode, qc_lookup)
         if stats.get("trna_annotated_rows", 0) == 0:
             warn(f"Audit table has no MTTRNA_* annotations: {in_vcf}. Check run_trna_annotate and whether you exported from pre-trna stage.")
         append_summary(summary_path, stats, "audit")
@@ -2668,7 +2711,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if args.cmd == "export-audit-table":
         mode = cfg.setting("final_filter_mode", "none")
-        stats = build_variant_audit_table(args.input, args.output, args.sample, mode)
+        dirs = make_outdirs(cfg)
+        qc_lookup = load_trna_gene_qc_lookup(str(dirs["reports"] / f"{args.sample}.trna_gene_liftover_qc.tsv"))
+        stats = build_variant_audit_table(args.input, args.output, args.sample, mode, qc_lookup)
         if stats.get("trna_annotated_rows", 0) == 0:
             warn(f"Audit table has no MTTRNA_* annotations: {args.input}. Check run_trna_annotate and input VCF stage.")
         return 0
