@@ -1028,6 +1028,9 @@ def load_all_primate_position_codon_table(path: str | Path) -> Dict[Tuple[str, i
                 continue
             p = line.rstrip("\n").split("\t")
             pos = int(p[idx["pos"]])
+            qc = {}
+            if trna_qc_lookup is not None:
+                qc = trna_qc_lookup.get((str(info.get("MTTRNA_S_ID", NA)), str(info.get("MTTRNA_H_ID", NA))), {})
             row = {
                 "gene": harmonize_gene_name(p[idx["gene"]]),
                 "strand": p[idx["strand"]],
