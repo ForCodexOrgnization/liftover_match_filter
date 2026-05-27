@@ -2191,9 +2191,12 @@ def trna_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], posmap_path:
 
 def evaluate_trna_region_policy(info: Dict[str, str]) -> Tuple[bool, str]:
     trna_status = str(info.get("MTTRNA_STATUS", NA))
-    # Keep non-comparable/non-tRNA noncoding variants by default.
+    # One-sided tRNA overlap is not structural-comparable evidence and should be dropped.
+    if trna_status in {"NO_SPECIES_TRNA", "NO_HUMAN_TRNA"}:
+        return False, f"DROP_ONE_SIDED_TRNA:{trna_status}"
+    # Keep other non-comparable/non-tRNA noncoding variants by default.
     # Only apply structural filtering when both sides are comparable tRNA annotations (MTTRNA_STATUS=OK).
-    if trna_status in {"NO_SPECIES_TRNA", "NO_HUMAN_TRNA", "NO_SPECIES_OR_HUMAN_TRNA", "MISSING_SPECIES_COORD", NA}:
+    if trna_status in {"NO_SPECIES_OR_HUMAN_TRNA", "MISSING_SPECIES_COORD", NA}:
         return True, f"PASS_NONCOMPARABLE_TRNA:{trna_status}"
     if trna_status != "OK":
         return True, f"PASS_NON_TRNA_OR_MISSING:{trna_status}"
