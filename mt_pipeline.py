@@ -2191,9 +2191,12 @@ def trna_stage(cfg: PipeConfig, sample: str, input_vcfs: List[str], posmap_path:
 
 def evaluate_trna_region_policy(info: Dict[str, str]) -> Tuple[bool, str]:
     trna_status = str(info.get("MTTRNA_STATUS", NA))
-    # Keep non-comparable/non-tRNA noncoding variants by default.
+    # One-sided tRNA overlap is not structural-comparable evidence and should be dropped.
+    if trna_status in {"NO_SPECIES_TRNA", "NO_HUMAN_TRNA"}:
+        return False, f"DROP_ONE_SIDED_TRNA:{trna_status}"
+    # Keep other non-comparable/non-tRNA noncoding variants by default.
     # Only apply structural filtering when both sides are comparable tRNA annotations (MTTRNA_STATUS=OK).
-    if trna_status in {"NO_SPECIES_TRNA", "NO_HUMAN_TRNA", "NO_SPECIES_OR_HUMAN_TRNA", "MISSING_SPECIES_COORD", NA}:
+    if trna_status in {"NO_SPECIES_OR_HUMAN_TRNA", "MISSING_SPECIES_COORD", NA}:
         return True, f"PASS_NONCOMPARABLE_TRNA:{trna_status}"
     if trna_status != "OK":
         return True, f"PASS_NON_TRNA_OR_MISSING:{trna_status}"
@@ -2341,6 +2344,7 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
     inferred_sample = strip_vcf_suffix(vcf_path)
     fields = [
         "species", "sample", "chrom", "pos", "ref", "alt", "lifted_pos",
+        "species_ref_base", "human_ref_base", "species_alt_base", "human_alt_base",
         "trna_status", "species_local_pos", "human_local_pos",
         "species_struct_class", "human_struct_class", "species_struct_element", "human_struct_element",
         "struct_class_match", "struct_element_match",
@@ -2375,6 +2379,10 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
                 "ref": parts[3],
                 "alt": parts[4],
                 "lifted_pos": info.get("MTLIFT_HUMAN_POS", parts[1]),
+                "species_ref_base": info.get("MTLIFT_ORIG_REF", parts[3]),
+                "human_ref_base": info.get("MTLIFT_HUMAN_REF", parts[3]),
+                "species_alt_base": info.get("MTLIFT_ORIG_ALT", parts[4]).split(",")[0],
+                "human_alt_base": parts[4].split(",")[0],
                 "trna_status": info.get("MTTRNA_STATUS", NA),
                 "species_local_pos": info.get("MTTRNA_S_LOCAL", NA),
                 "human_local_pos": info.get("MTTRNA_H_LOCAL", NA),
