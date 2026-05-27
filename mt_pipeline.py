@@ -2344,6 +2344,7 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
     inferred_sample = strip_vcf_suffix(vcf_path)
     fields = [
         "species", "sample", "chrom", "pos", "ref", "alt", "lifted_pos",
+        "species_ref_base", "human_ref_base", "species_alt_base", "human_alt_base",
         "trna_status", "species_local_pos", "human_local_pos",
         "species_struct_class", "human_struct_class", "species_struct_element", "human_struct_element",
         "struct_class_match", "struct_element_match",
@@ -2378,6 +2379,10 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
                 "ref": parts[3],
                 "alt": parts[4],
                 "lifted_pos": info.get("MTLIFT_HUMAN_POS", parts[1]),
+                "species_ref_base": info.get("MTLIFT_ORIG_REF", parts[3]),
+                "human_ref_base": info.get("MTLIFT_HUMAN_REF", parts[3]),
+                "species_alt_base": info.get("MTLIFT_ORIG_ALT", parts[4]).split(",")[0],
+                "human_alt_base": parts[4].split(",")[0],
                 "trna_status": info.get("MTTRNA_STATUS", NA),
                 "species_local_pos": info.get("MTTRNA_S_LOCAL", NA),
                 "human_local_pos": info.get("MTTRNA_H_LOCAL", NA),
