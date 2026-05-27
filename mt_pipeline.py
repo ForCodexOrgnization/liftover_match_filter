@@ -2368,9 +2368,6 @@ def build_variant_audit_table(vcf_path: str, output_tsv: str, sample: str, final
                 stats["skipped_malformed"] += 1
                 continue
             info = parse_info(parts[7])
-            qc = {}
-            if trna_qc_lookup is not None:
-                qc = trna_qc_lookup.get((str(info.get("MTTRNA_S_ID", NA)), str(info.get("MTTRNA_H_ID", NA))), {})
             row = {
                 "species": sample,
                 "sample": info.get("MTLIFT_SAMPLE", inferred_sample),
